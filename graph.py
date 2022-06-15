@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 from net.layer import TupleConstruct, TupleIndexing, Mul2, Add2, BasicIdentity, Cat, ListConstruct, Flatten, View, FunctionWrapperV2
 from copy import deepcopy
-
+import time
 # todo: get shapes of all the tensors when tracing
 
 Basic_ops = (nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AdaptiveMaxPool1d, nn.AdaptiveMaxPool2d,
@@ -31,16 +31,41 @@ def parse_computation_graph(module, inputs):
     :return: nx.MultiDiGraph
     '''
 
+    torch.cuda.synchronize()
+    print("--------before parse_raw_computation_graph_from_jit")
+    print(torch.cuda.memory_summary())
     computation_graph, input_node_ids, output_node_ids = parse_raw_computation_graph_from_jit(module, inputs)
+    print("-----computation_graph type:")
+    torch.cuda.synchronize()
+    print(type(computation_graph))
+    print("--------after parse_raw_computation_graph_from_jit")
+    print(torch.cuda.memory_summary())
+
     computation_graph = optimize_computation_graph(computation_graph, input_node_ids, output_node_ids)
+    print("--------after optimize_computation_graph")
+    torch.cuda.synchronize()
+    print(torch.cuda.memory_summary())
 
     sources, targets = get_source_target(computation_graph)
     if len(sources) > 1 or len(targets) > 1:
         raise Exception("Currently not supporting multi input or output graph, we are working on supporting it")
     source, target = sources[0], targets[0]
     with torch.no_grad():
+        # zhaojp pack (G in out do_ckpt cost etc as dict)
+        print("--------before Segment(graph)")
+        torch.cuda.synchronize()
+        print(torch.cuda.memory_summary())
         tmp_parsed_segment = Segment(computation_graph, sources[0], targets[0], do_checkpoint=False, record_tensor_cost=True)
+        print("--------after Segment(graph)")
+        torch.cuda.synchronize()
+        print(torch.cuda.memory_summary())
+        ## zhaojp: why call a forward here?
+        print("%s------------no_grad run segment.forward----"%time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
         output = tmp_parsed_segment.forward(inputs[0])
+        print("%s------------no_grad run segment.forward done----"%time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
+        print("--------after Segment.forward")
+        torch.cuda.synchronize()
+        print(torch.cuda.memory_summary())
     return computation_graph, source, target
 
 def parse_raw_computation_graph_from_jit(module, inputs):
@@ -50,7 +75,11 @@ def parse_raw_computation_graph_from_jit(module, inputs):
     :return: nx.MultiDiGraph
     '''
     add_input_tensor_hook_recursively(module)
+    # zhaojp why run the forward??
+    print("%s------------parse_raw_computation_graph_from_jit forward----"%time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
     output = module.forward(*inputs)
+    print("%s------------parse_raw_computation_graph_from_jit forward done----"%time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
+
     remove_input_tensor_hook_recursively(module)
     computation_graph, _, input_node_ids, output_node_ids = build_computation_graph_recursively(module, inputs, inputs_nodes_ids=None, outputs_nodes_ids=None, cur_node_idx=None)
     clean_up_input_tensor_recursively(module)
@@ -401,6 +430,7 @@ def build_computation_graph_recursively(module, inputs, inputs_nodes_ids=None, o
     if cur_node_idx is None:
         cur_node_idx = 0
     with torch.no_grad():
+        ## zhaojp jit.trace run forward again??
         traced = torch.jit.trace(module.forward, tuple(inputs))
     del inputs
     traced_graph = traced.graph
@@ -832,8 +862,11 @@ def graph_forward(x, G=None, source=None, target=None, successors_dict=None, pre
                 op = edges[id]['module']
                 input = tensor_dict[vertex_key]
                 if do_checkpoint:
+                    ## zhaojp 
+                    #print("%s ckpt"%type(op))
                     output = checkpoint(segment_checkpoint_forward(op), input)
                 else:
+                    #print("%s no-ckpt"%type(op))
                     output = op(input)
 
                 if type(output) == tuple:
@@ -867,6 +900,7 @@ def graph_forward(x, G=None, source=None, target=None, successors_dict=None, pre
             if type(tensor_dict[node]) == dict:
                 pass
             else:
+                ## zhaojp only by elemenet not elemnt * data_type?
                 node_cost = tensor_dict[node].numel()
                 G.nodes[node]['cost'] = node_cost
 
@@ -899,6 +933,7 @@ class Segment(nn.Module):
             if (start, end) not in edges_dict:
                 edges_dict[(start, end)] = {}
             edges_dict[(start, end)][id] = e
+        ## zhaojp actually append?
         info_dict.update(successors_dict=successors_dict, predecessors_dict=predecessors_dict, edges_dict=edges_dict,
                          do_checkpoint=do_checkpoint, record_tensor_cost=record_tensor_cost)
         return info_dict
