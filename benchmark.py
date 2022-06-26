@@ -174,14 +174,15 @@ def main(arch, device):
     # with torch.no_grad():
     #     inp = torch.rand(*input_size).to(device)
     #     G, source, target = net.parse_graph(inp)
-    print('Parsing Computation Graph')
+    print("PyTorch: ", torch.__version__, 'Parsing Computation Graph')
     inputs = [torch.rand(*input_size).to(device)]
+    inputs_small = [torch.rand(*input_size_small).to(device)]
     try:
-        G, source, target = parse_computation_graph(net, inputs)
+        G, source, target = parse_computation_graph(net, inputs_small)
     except:
         print('Parsing Computation Graph with torch.jit failed, revert to manual parse_graph function')
         with torch.no_grad():
-            inp = torch.rand(*input_size).to(device)
+            inp = torch.rand(*input_size_small).to(device)
             G, source, target = net.parse_graph(inp)
 
     solver = ArbitrarySolver()

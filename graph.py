@@ -30,7 +30,6 @@ def parse_computation_graph(module, inputs):
     :param input: torch.Tensor, example input tensor
     :return: nx.MultiDiGraph
     '''
-
     computation_graph, input_node_ids, output_node_ids = parse_raw_computation_graph_from_jit(module, inputs)
     computation_graph = optimize_computation_graph(computation_graph, input_node_ids, output_node_ids)
 
